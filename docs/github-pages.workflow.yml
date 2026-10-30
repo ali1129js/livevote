@@ -1,0 +1,59 @@
+# GitHub Pages deploy workflow for the LiveVote CLIENT.
+#
+# It lives in docs/ because the gh token used to prepare this repo has no `workflow` scope, so it could not be
+# pushed to .github/workflows/. To enable it, a person with the right permission moves it there:
+#
+#   git mv docs/github-pages.workflow.yml .github/workflows/pages.yml
+#
+# and sets, in the repo's Settings:
+#   - Pages -> Source: "GitHub Actions"
+#   - Variables -> SERVER_URL = https://<your-render-service>.onrender.com   (public value, not a secret)
+#
+# Note: GitHub Pages on a PRIVATE repo needs a paid GitHub plan. On the free plan the repo must be public.
+name: Deploy client to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - name: Build client
+        run: npm run build -w client
+        env:
+          VITE_BASE: /${{ github.event.repository.name }}/
+          VITE_SERVER_URL: ${{ vars.SERVER_URL }}
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: client/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

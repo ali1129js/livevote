@@ -1,0 +1,23 @@
+# Render Blueprint for the LiveVote server (free web service). NOT applied automatically:
+# nothing is created on Render until someone connects this repo and approves the Blueprint.
+services:
+  - type: web
+    name: livevote-server
+    runtime: node
+    plan: free
+    # devDependencies (esbuild) are needed to bundle the server, so keep them even though NODE_ENV=production.
+    buildCommand: npm ci --include=dev && npm run build -w server
+    startCommand: node server/dist/index.js
+    healthCheckPath: /api/health
+    autoDeploy: false
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      # Exact origin of the GitHub Pages site, e.g. https://ali1129js.github.io (no path, no trailing slash).
+      - key: CLIENT_ORIGIN
+        sync: false
+      # Render terminates TLS in one proxy hop; needed so rate limits see real client IPs.
+      - key: TRUST_PROXY
+        value: "1"
