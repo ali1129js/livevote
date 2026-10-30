@@ -1,0 +1,23 @@
+{
+  "name": "@livevote/server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --tsconfig tsconfig.json src/index.ts",
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --packages=external --tsconfig=tsconfig.json --outfile=dist/index.js --sourcemap",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^5.2.0",
+    "socket.io": "^4.8.4"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "esbuild": "^0.28.2",
+    "socket.io-client": "^4.8.4",
+    "tsx": "^4.20.0"
+  }
+}
