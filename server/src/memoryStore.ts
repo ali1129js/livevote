@@ -2,9 +2,16 @@ import type { PollRecord, PollStore } from "./store";
 
 /** Volatile store: everything is lost on restart (acceptable for the free tier; polls live 7 days max). */
 export class MemoryPollStore implements PollStore {
+  readonly kind = "memory";
+  readonly sweepIntervalMs = 60_000;
   private readonly polls = new Map<string, PollRecord>();
 
+  async init(): Promise<void> {}
+
+  async close(): Promise<void> {}
+
   async create(poll: PollRecord): Promise<void> {
+    if (this.polls.has(poll.id)) throw new Error("Duplicate poll id.");
     this.polls.set(poll.id, structuredClone(poll));
   }
 

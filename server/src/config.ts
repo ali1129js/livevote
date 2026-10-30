@@ -5,6 +5,8 @@ export interface Config {
   /** Number of reverse proxies in front of us (Render: 1). */
   trustProxyHops: number;
   production: boolean;
+  /** Postgres connection string (e.g. Neon). When null the volatile in-memory store is used. Secret: never log it. */
+  databaseUrl: string | null;
   /** Rate limits (defaults suit one small team; raise for load tests / e2e). */
   limits: { createPer10Min: number; joinsPerMinPerIp: number; eventsPer10sPerSocket: number };
 }
@@ -28,6 +30,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       throw new Error(`CLIENT_ORIGIN entries must be exact origins like https://example.com (got "${o}").`);
     }
   }
+  const databaseUrl = env.DATABASE_URL?.trim() || null;
+  if (databaseUrl !== null && !/^postgres(ql)?:\/\/\S+$/.test(databaseUrl)) {
+    // Deliberately do not echo the value: it contains a password.
+    throw new Error("DATABASE_URL must be a postgres:// or postgresql:// connection string.");
+  }
   const port = Number(env.PORT ?? 3001);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("PORT must be a valid port number.");
   const trustProxyHops = Number(env.TRUST_PROXY ?? 0);
@@ -44,5 +51,5 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     joinsPerMinPerIp: int("RATE_LIMIT_JOINS", 60, 100_000),
     eventsPer10sPerSocket: int("RATE_LIMIT_EVENTS", 30, 100_000),
   };
-  return { port, clientOrigins, trustProxyHops, production, limits };
+  return { port, clientOrigins, trustProxyHops, production, databaseUrl, limits };
 }

@@ -59,14 +59,14 @@ e2e uses a system Chrome at `/usr/bin/google-chrome` if present (override with `
 
 - **Server is the authority.** The server decides who may see results: a socket gets `results` only if it has voted, is the host, or the poll is closed. Hiding results in the UI alone would leak them over the socket.
 - **Per-viewer state pushes.** After any change the server sends each connected viewer *their* `ClientState` (poll, own vote, `canAddOption`, results or `null`). Simple, hard to get wrong, fine for ≤500 voters per poll.
-- **Store interface.** `PollStore` (`server/src/store.ts`) is async with one atomic primitive, `update(id, mutate)`; `MemoryPollStore` implements it. A Redis/SQLite/Postgres store can replace it without touching `PollService` or the sockets. The memory store works on copies and commits all-or-nothing.
+- **Store interface.** `PollStore` (`server/src/store.ts`) is async with one atomic primitive, `update(id, mutate)`; two implementations: `MemoryPollStore` (default) and `PgPollStore` (`server/src/pgStore.ts`, Postgres), chosen at startup by `DATABASE_URL` (see *Persistence*). Neither touches `PollService` or the sockets. Both work on copies and commit all-or-nothing; in Postgres `update` is one transaction holding a `SELECT … FOR UPDATE` row lock, so concurrent votes / option adds on the same poll queue up instead of overwriting each other (the 500-voter and 10-option caps are checked inside that lock).
 - **Host token.** 24 random bytes (base64url) shown once; only its SHA-256 is stored; compared in constant time. It lives in the URL *fragment* (`#/p/<id>/host/<token>`), so it is never sent to the static host or written to server access logs. Not logged anywhere.
 - **Hash routing.** Works on GitHub Pages without rewrites and keeps the token out of requests.
 - **Votes and people.** `votes` = voters who picked an option; `people` = sum of those voters' party sizes. With approval voting, a voter's party counts toward each option they picked, but **total people counts each voter once**.
 - **Winner & ties.** Winner = most votes. Equal top vote counts are a tie, shown as a banner, `Tied` badges and a `Tie: A / B` summary (people count is only used to order rows).
 - **Add your own.** One real add per voter (tracked by voter id). A merged duplicate does not use up the add and selects the existing option. Max 10 options in total. Host-removing an option deletes its votes; a voter left with no pick can vote again.
 - **Closing.** `closesAt` is checked on every write; a server timer also pushes the closed state so open screens flip at the deadline. Host *Reset* clears votes (and add-your-own allowances) and re-opens (an elapsed deadline is dropped).
-- **Limits & validation.** Question ≤140 chars, option ≤60, 2–6 options, people 1–20, ≤500 voters/poll, ≤5000 polls in memory, 8 kB JSON bodies, 10 kB socket messages, closing time 1 min–7 days ahead, control characters stripped, all inputs re-validated on the server.
+- **Limits & validation.** Question ≤140 chars, option ≤60, 2–6 options, people 1–20, ≤500 voters/poll, ≤5000 polls stored, 8 kB JSON bodies, 10 kB socket messages, closing time 1 min–7 days ahead, control characters stripped, all inputs re-validated on the server.
 - **Rate limiting.** Per IP: 10 poll creations / 10 min, 60 joins / min; per socket: 30 events / 10 s. In-memory fixed windows. `X-Forwarded-For` is trusted only when `TRUST_PROXY` says how many proxies sit in front.
 - **CORS.** Only exact origins from `CLIENT_ORIGIN` (required in production, `*` rejected) for REST and Socket.IO.
 - **Cold starts.** The create page pings `/api/health` immediately to start waking the server while the host types; both pages show the waking banner after 3.5 s and carry on by themselves. Socket.IO reconnects with back-off and the client re-joins with its voter id, so state is restored.
@@ -75,16 +75,29 @@ e2e uses a system Chrome at `/usr/bin/google-chrome` if present (override with `
 ## Known limits
 
 - **One vote per browser is a deterrent, not a lock.** The voter id is a random value in `localStorage`; clearing storage, a private window or another browser/device gives a new identity, and a script can mint ids (rate limits and the 500-voter cap bound the damage). There are no accounts by design.
-- **Memory only.** A server restart (or Render free-tier spin-down after ~15 min idle) **loses all polls**. The interface is ready for persistence, but none is shipped.
+- **Memory unless `DATABASE_URL` is set.** Without it a server restart (or Render free-tier spin-down after ~15 min idle) **loses all polls**. With it, polls, votes and hashed host tokens survive restarts and sleeps.
 - **Single instance.** Rate limits and sockets are per process; horizontal scaling needs a shared store and the Socket.IO Redis adapter.
 - Anyone with the share link can vote and (if enabled) add an option; anyone with the host link controls the poll. There is no way to rotate a leaked host link.
 - Closing time: the closed state is pushed within ~1 s of the deadline; the countdown corrects for the device clock using the server's time, but it is only as exact as the network round trip.
 - Free-tier cold start can exceed 30 s; a poll can't be created while the server is asleep until it wakes.
 
+## Persistence (optional, free, no card)
+
+Set `DATABASE_URL` to a Postgres connection string and the server stores polls there; leave it unset and it falls back to memory. Recommended: **Neon Postgres, Free plan** (no time limit, no credit card; Render's own free Postgres is deleted after 30 days).
+
+1. Sign up at <https://console.neon.tech/signup> (email, or "Continue with GitHub"/Google; no card asked).
+2. Create a project (pick a region near your Render region, e.g. AWS Frankfurt for Render Frankfurt). The default database `neondb` is fine.
+3. Click **Connect**, keep "Connection pooling" on, copy the connection string (`postgresql://…-pooler….neon.tech/neondb?sslmode=require…`).
+4. Put it in Render → service → Environment as `DATABASE_URL` (the Blueprint declares it with `sync: false`, so Render prompts for it). For local use put it in an untracked `server/.env`-style environment, never in git.
+
+The server creates its table (`livevote_polls`) on first start; no migration step. If the URL is wrong the server exits at startup with the error code only (the URL is never printed). Free-plan limits (Neon, Oct 2026): 100 CU-hours compute/month per project (compute sleeps after 5 min idle and resumes in a few hundred ms), 1 GB storage, 5 GB egress/month; polls are a few KB each, and the server keeps ≤5000 and deletes polls after 7 days (swept hourly, and ignored on read the moment they expire).
+
+Tests: `npm test` runs the store contract suite against memory and pg-mem. To also run it (including the true concurrency cases) against a real Postgres: `TEST_DATABASE_URL=postgresql://… npm test` (creates and drops its own `lvtest_*` table).
+
 ## Deploy prep (nothing is deployed)
 
 - **Client → GitHub Pages:** `docs/github-pages.workflow.yml` (kept in `docs/` because the gh token has no `workflow` scope; move it to `.github/workflows/pages.yml` to enable). Set repo variable `SERVER_URL`. Note: Pages on a *private* repo needs a paid plan.
-- **Server → Render (free web service):** `render.yaml` blueprint. Set `CLIENT_ORIGIN` to the Pages origin (e.g. `https://ali1129js.github.io`). No Render service has been created.
+- **Server → Render (free web service):** `render.yaml` blueprint. Set `CLIENT_ORIGIN` to the Pages origin (e.g. `https://ali1129js.github.io`) and `DATABASE_URL` (see *Persistence*). No Render service has been created.
 - Build-time client config: `VITE_SERVER_URL`, `VITE_BASE` (e.g. `/livevote/`).
 
 ## Layout

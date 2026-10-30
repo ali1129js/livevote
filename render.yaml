@@ -18,6 +18,11 @@ services:
       # Exact origin of the GitHub Pages site, e.g. https://ali1129js.github.io (no path, no trailing slash).
       - key: CLIENT_ORIGIN
         sync: false
+      # Postgres connection string (Neon free plan: no card; see README "Persistence"). Secret: Render asks for it
+      # when the Blueprint is applied and it is never stored in this file. Without it the server falls back to the
+      # volatile in-memory store (polls are lost on every restart / spin-down).
+      - key: DATABASE_URL
+        sync: false
       # Render terminates TLS in one proxy hop; needed so rate limits see real client IPs.
       - key: TRUST_PROXY
         value: "1"

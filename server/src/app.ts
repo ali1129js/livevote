@@ -9,10 +9,10 @@ import {
   type ServerToClientEvents,
 } from "@livevote/shared";
 import type { Config } from "./config";
-import { MemoryPollStore } from "./memoryStore";
 import { PollService, ServiceError, type Viewer } from "./pollService";
 import { RateLimiter, clientIp } from "./rateLimit";
 import type { PollStore } from "./store";
+import { createStore } from "./storeFactory";
 
 interface SocketData {
   pollId?: string;
@@ -49,7 +49,7 @@ export function createApp(opts: AppOptions): RunningApp {
   const { config } = opts;
   const clock = opts.clock ?? Date.now;
   const log = opts.log ?? ((m: string) => console.log(`[livevote] ${m}`));
-  const store = opts.store ?? new MemoryPollStore();
+  const store = opts.store ?? createStore(config, log);
   const service = new PollService(store, { clock, maxPolls: opts.limits?.maxPolls ?? 5000 });
 
   const createLimiter = new RateLimiter(opts.limits?.createPerWindow ?? config.limits.createPer10Min, 10 * 60_000);
@@ -258,11 +258,19 @@ export function createApp(opts: AppOptions): RunningApp {
     createLimiter.prune(now);
     joinLimiter.prune(now);
     eventLimiter.prune(now);
-    void service.sweepExpired().then((ids) => {
-      for (const id of ids) io.to(room(id)).emit("poll:gone");
-    });
   }, 60_000);
   sweeper.unref();
+  // Expiry sweep runs on the store's own cadence (persistent stores sweep rarely so a scale-to-zero DB can sleep).
+  // Expired polls are rejected on read regardless, so this only reclaims space and tells connected sockets.
+  const expirySweeper = setInterval(() => {
+    void service
+      .sweepExpired()
+      .then((ids) => {
+        for (const id of ids) io.to(room(id)).emit("poll:gone");
+      })
+      .catch((e: unknown) => log(`expiry sweep failed: ${e instanceof Error ? e.name : "unknown"}`));
+  }, store.sweepIntervalMs);
+  expirySweeper.unref();
 
   return {
     httpServer,
@@ -278,6 +286,7 @@ export function createApp(opts: AppOptions): RunningApp {
     },
     async close() {
       clearInterval(sweeper);
+      clearInterval(expirySweeper);
       for (const t of closeTimers.values()) clearTimeout(t);
       await io.close();
       if (httpServer.listening) await new Promise<void>((r) => httpServer.close(() => r()));

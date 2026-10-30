@@ -27,12 +27,20 @@ export interface PollRecord {
 }
 
 /**
- * Persistence boundary. The in-memory implementation is the only one today;
- * a Redis/SQLite/Postgres store can be dropped in by implementing this interface.
- * All methods are async on purpose, and `update` is the single atomic
- * read-modify-write primitive (so a real DB can use a transaction / CAS).
+ * Persistence boundary. Two implementations exist: `MemoryPollStore` (volatile, the default)
+ * and `PgPollStore` (Postgres, selected by DATABASE_URL). All methods are async on purpose, and
+ * `update` is the single atomic read-modify-write primitive (a row-locked transaction in Postgres),
+ * so concurrent votes / option adds on one poll never lose updates.
  */
 export interface PollStore {
+  /** Human-readable kind for logs ("memory", "postgres"). Never contains connection details. */
+  readonly kind: string;
+  /** How often the server should call `deleteExpired`. Persistent stores sweep rarely to let a scale-to-zero DB sleep. */
+  readonly sweepIntervalMs: number;
+  /** Prepare the backend (create schema, check connectivity). Safe to call more than once. */
+  init(): Promise<void>;
+  /** Release connections. */
+  close(): Promise<void>;
   create(poll: PollRecord): Promise<void>;
   get(id: string): Promise<PollRecord | null>;
   /**

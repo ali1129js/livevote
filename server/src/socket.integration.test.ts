@@ -7,7 +7,7 @@ import type { Config } from "./config";
 type Client = Socket<ServerToClientEvents, ClientToServerEvents>;
 
 const ORIGIN = "http://localhost:5173";
-const config: Config = { port: 0, clientOrigins: [ORIGIN], trustProxyHops: 0, production: false, limits: { createPer10Min: 10, joinsPerMinPerIp: 60, eventsPer10sPerSocket: 30 } };
+const config: Config = { port: 0, clientOrigins: [ORIGIN], trustProxyHops: 0, production: false, databaseUrl: null, limits: { createPer10Min: 10, joinsPerMinPerIp: 60, eventsPer10sPerSocket: 30 } };
 const vid = (n: number) => `integration-voter-${String(n).padStart(4, "0")}`;
 const body = { question: "Where do we eat tonight?", options: ["Italiano", "Sushi", "Thai"], multiple: false, allowAddOwn: true, closesAt: null };
 

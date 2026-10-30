@@ -25,6 +25,19 @@ describe("loadConfig", () => {
     expect(loadConfig({ RATE_LIMIT_CREATE: "500" }).limits.createPer10Min).toBe(500);
     expect(() => loadConfig({ RATE_LIMIT_CREATE: "0" })).toThrow(/RATE_LIMIT_CREATE/);
   });
+  it("reads DATABASE_URL (optional) and never echoes it in errors", () => {
+    expect(loadConfig({}).databaseUrl).toBeNull();
+    expect(loadConfig({ DATABASE_URL: "   " }).databaseUrl).toBeNull();
+    expect(loadConfig({ DATABASE_URL: " postgresql://u:p@h.example/db?sslmode=require " }).databaseUrl).toBe(
+      "postgresql://u:p@h.example/db?sslmode=require",
+    );
+    expect(() => loadConfig({ DATABASE_URL: "mysql://user:hunter2@h/db" })).toThrow(/DATABASE_URL/);
+    try {
+      loadConfig({ DATABASE_URL: "mysql://user:hunter2@h/db" });
+    } catch (e) {
+      expect(String(e)).not.toContain("hunter2");
+    }
+  });
   it("rejects a bad port or proxy count", () => {
     expect(() => loadConfig({ PORT: "abc" })).toThrow();
     expect(() => loadConfig({ TRUST_PROXY: "9" })).toThrow();
