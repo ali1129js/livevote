@@ -2,7 +2,8 @@
 //   LIVE_URL=https://<user>.github.io/livevote/ OUT=/tmp/shots node e2e/live-check.mjs
 // Fresh browser context per run, desktop + mobile (390 px), with and without "Close automatically". Prints console errors,
 // network requests, socket.io frames and timings, and what the user sees on the button / in alerts. Exit 1 on any failure.
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
+const chrome = process.env.CHROME_PATH ?? ["/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser"].find((p) => existsSync(p));
 import { chromium } from "@playwright/test";
 const URL_ = process.env.LIVE_URL ?? "https://ali1129js.github.io/livevote/";
 const out = process.env.OUT ?? "e2e/.live";
@@ -20,7 +21,7 @@ for (let i = 1; i <= (process.env.HEALTH_FIRST === "0" ? 0 : 3); i++) {
   const r = await fetch(new URL("/api/health", API), { cache: "no-store" }).catch(() => null);
   console.log(`health #${i}: ${r ? r.status : "FAILED"} in ${Date.now() - t} ms`);
 }
-const browser = await chromium.launch({ ...(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : {}), args: ["--no-sandbox"] });
+const browser = await chromium.launch({ ...(chrome ? { executablePath: chrome } : {}), args: ["--no-sandbox"] });
 const only = process.env.PROFILE; // "desktop" | "mobile"
 for (const withClose of process.env.CLOSE_ONLY === "0" ? [false] : [false, true]) for (const p of profiles.filter((x) => !only || x.name === only)) {
   const { name, ...ctxOpts } = p;
