@@ -35,8 +35,8 @@ export function PollPage({ pollId, hostToken }: { pollId: string; hostToken: str
   if (!state) {
     return (
       <div className="stack" aria-busy="true">
-        <ConnectionBanner kind={connection} waitedSeconds={live.waitedSeconds} />
-        <div className="card stack" aria-hidden={connection === "waking"}>
+        <ConnectionBanner kind={connection} waitedSeconds={live.waitedSeconds} purpose="open" />
+        <div className="card stack">
           <div className="skeleton skeleton-title" />
           <div className="skeleton" />
           <div className="skeleton" />
