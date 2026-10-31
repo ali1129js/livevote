@@ -160,6 +160,7 @@ test.describe("LiveVote walkthrough (e2e + a11y + screenshots)", () => {
     await page.route("**/api/health", (route) => route.abort());
     await page.goto("/");
     await expect(page.getByTestId("waking")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("waking")).toContainText("takes up to a minute");
     await checkState(page, "10-create-waking-up");
   });
 

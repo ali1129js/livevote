@@ -1,8 +1,10 @@
 import { createApp } from "./app";
 import { loadConfig } from "./config";
+import { installProcessGuards } from "./processGuards";
 import { createStore } from "./storeFactory";
 
 const log = (msg: string) => console.log(`[livevote] ${msg}`);
+installProcessGuards(log);
 const config = loadConfig();
 const store = createStore(config, log);
 try {

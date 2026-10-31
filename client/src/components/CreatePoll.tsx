@@ -1,4 +1,4 @@
-import { useId, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { LIMITS, validateCreateInput, type CreatePollInput } from "@livevote/shared";
 import { ApiFailure, createPoll } from "../api";
 import { hostTokenKey, safeSet } from "../storage";
@@ -26,8 +26,14 @@ export function CreatePoll() {
   const [closeAt, setCloseAt] = useState(() => toLocalInput(Date.now() + 60 * 60_000));
   const [errors, setErrors] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const errRef = useRef<HTMLDivElement>(null);
 
   const minClose = useMemo(() => toLocalInput(Date.now() + 61_000), []);
+
+  // Make sure a validation or server error is on screen (on a phone the keyboard or the page height can hide it).
+  useEffect(() => {
+    if (errors.length > 0) errRef.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+  }, [errors]);
 
   const setOption = (i: number, v: string) => setOptions((o) => o.map((x, j) => (j === i ? v : x)));
 
@@ -70,7 +76,7 @@ export function CreatePoll() {
         <p className="muted">Make a quick poll, share the link in your group chat, and watch the votes roll in. No login.</p>
       </div>
 
-      <ConnectionBanner kind={wake.state === "waking" ? "waking" : "ready"} waitedSeconds={wake.waitedSeconds} />
+      <ConnectionBanner kind={wake.state} waitedSeconds={wake.waitedSeconds} purpose="create" confirmReady busy={busy} />
 
       <div className="field">
         <label htmlFor={`${uid}-q`}>Question</label>
@@ -86,7 +92,10 @@ export function CreatePoll() {
 
       <fieldset className="field">
         <legend>
-          Options <span className="muted">({LIMITS.optionsMin}–{LIMITS.optionsMax})</span>
+          Options{" "}
+          <span className="muted">
+            ({LIMITS.optionsMin}–{LIMITS.optionsMax})
+          </span>
         </legend>
         <ul className="option-inputs">
           {options.map((o, i) => (
@@ -101,7 +110,12 @@ export function CreatePoll() {
                 onChange={(e) => setOption(i, e.target.value)}
               />
               {options.length > LIMITS.optionsMin && (
-                <button type="button" className="btn btn-icon" aria-label={`Remove option ${i + 1}`} onClick={() => setOptions((x) => x.filter((_, j) => j !== i))}>
+                <button
+                  type="button"
+                  className="btn btn-icon"
+                  aria-label={`Remove option ${i + 1}`}
+                  onClick={() => setOptions((x) => x.filter((_, j) => j !== i))}
+                >
                   ✕
                 </button>
               )}
@@ -147,14 +161,15 @@ export function CreatePoll() {
       </fieldset>
 
       {errors.length > 0 && (
-        <div id={errId} role="alert" className="error-box">
+        <div id={errId} ref={errRef} role="alert" className="error-box">
           {errors.map((m) => (
             <p key={m}>{m}</p>
           ))}
         </div>
       )}
 
-      <button type="submit" className="btn btn-primary btn-lg" disabled={busy}>
+      <button type="submit" className="btn btn-primary btn-lg" disabled={busy} aria-busy={busy}>
+        {busy && <span className="spinner spinner-inline" aria-hidden="true" />}
         {busy ? (wake.state === "waking" ? "Waking the server…" : "Creating…") : "Create poll"}
       </button>
     </form>

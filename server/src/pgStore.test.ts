@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { newDb } from "pg-mem";
 import { connect, type Socket } from "socket.io-client";
 import { describe, expect, it, vi } from "vitest";
@@ -9,7 +10,12 @@ import { PgPollStore, type PgClientLike, type PgPoolLike } from "./pgStore";
 import { createStore } from "./storeFactory";
 
 /** A scripted fake pool: records every SQL statement and can inject failures. */
-function fakePool(script: { connectFailures?: Error[]; failOn?: (sql: string) => Error | null } = {}) {
+function fakePool(
+  script: {
+    connectFailures?: Error[];
+    failOn?: (sql: string) => Error | null;
+  } = {},
+) {
   const sqls: string[] = [];
   const released: unknown[] = [];
   const failures = [...(script.connectFailures ?? [])];
@@ -22,8 +28,19 @@ function fakePool(script: { connectFailures?: Error[]; failOn?: (sql: string) =>
         return {
           rows: [
             {
-              id: "p1", host_token_hash: "00", question: "q?", options: [], next_option_seq: 1, multiple: false, allow_add_own: false,
-              closes_at: null, closed_at: null, created_at: "1", expires_at: "2", votes: {}, adders: [],
+              id: "p1",
+              host_token_hash: "00",
+              question: "q?",
+              options: [],
+              next_option_seq: 1,
+              multiple: false,
+              allow_add_own: false,
+              closes_at: null,
+              closed_at: null,
+              created_at: "1",
+              expires_at: "2",
+              votes: {},
+              adders: [],
             },
           ],
         };
@@ -72,17 +89,25 @@ describe("PgPollStore transaction handling", () => {
 
   it("destroys the connection when it was lost mid-transaction", async () => {
     const lost = Object.assign(new Error("Connection terminated unexpectedly"), { code: "57P01" });
-    const f = fakePool({ failOn: (sql) => (/FOR UPDATE/.test(sql) ? lost : /ROLLBACK/.test(sql) ? lost : null) });
+    const f = fakePool({
+      failOn: (sql) => (/FOR UPDATE/.test(sql) ? lost : /ROLLBACK/.test(sql) ? lost : null),
+    });
     const store = new PgPollStore({ pool: f.pool, skipSchemaSetup: true });
     await expect(store.update("p1", () => 1)).rejects.toThrow(/terminated/);
-    expect(f.released).toEqual([true]);
+    expect(f.released).toEqual([true, true]); // original try + the one retry on a fresh connection, both destroyed
   });
 });
 
 describe("PgPollStore connection retries", () => {
   it("retries transient connect failures (e.g. a cold Neon compute) and then succeeds", async () => {
-    const f = fakePool({ connectFailures: [new Error("timeout exceeded when trying to connect"), new Error("ECONNRESET")] });
-    const store = new PgPollStore({ pool: f.pool, skipSchemaSetup: true, retryDelayMs: 0 });
+    const f = fakePool({
+      connectFailures: [new Error("timeout exceeded when trying to connect"), new Error("ECONNRESET")],
+    });
+    const store = new PgPollStore({
+      pool: f.pool,
+      skipSchemaSetup: true,
+      retryDelayMs: 0,
+    });
     expect(await store.get("p1")).toBeNull();
   });
 
@@ -90,16 +115,26 @@ describe("PgPollStore connection retries", () => {
     const connect = vi.fn(async () => {
       throw new Error("down");
     });
-    const store = new PgPollStore({ pool: { connect, end: async () => {} }, skipSchemaSetup: true, retryDelayMs: 0 });
+    const store = new PgPollStore({
+      pool: { connect, end: async () => {} },
+      skipSchemaSetup: true,
+      retryDelayMs: 0,
+    });
     await expect(store.get("x")).rejects.toThrow("down");
     expect(connect).toHaveBeenCalledTimes(3);
   });
 
   it("does not retry authentication errors", async () => {
     const connect = vi.fn(async () => {
-      throw Object.assign(new Error("password authentication failed"), { code: "28P01" });
+      throw Object.assign(new Error("password authentication failed"), {
+        code: "28P01",
+      });
     });
-    const store = new PgPollStore({ pool: { connect, end: async () => {} }, skipSchemaSetup: true, retryDelayMs: 0 });
+    const store = new PgPollStore({
+      pool: { connect, end: async () => {} },
+      skipSchemaSetup: true,
+      retryDelayMs: 0,
+    });
     await expect(store.get("x")).rejects.toThrow();
     expect(connect).toHaveBeenCalledTimes(1);
   });
@@ -135,14 +170,22 @@ describe("end to end: a poll survives a server restart", () => {
     const db = newDb();
     const open = (skip: boolean) => {
       const { Pool } = db.adapters.createPg();
-      return new PgPollStore({ pool: new Pool() as unknown as PgPoolLike, skipSchemaSetup: skip });
+      return new PgPollStore({
+        pool: new Pool() as unknown as PgPoolLike,
+        skipSchemaSetup: skip,
+      });
     };
     type Client = Socket<ServerToClientEvents, ClientToServerEvents>;
     const sockets: Client[] = [];
     const emitAck = <T>(c: Client, ev: keyof ClientToServerEvents, ...args: unknown[]) =>
       new Promise<Ack<T>>((resolve) => (c.emit as (...a: unknown[]) => void)(ev, ...args, resolve));
     const join = async (base: string, payload: object) => {
-      const c: Client = connect(base, { transports: ["websocket"], forceNew: true, reconnection: false, extraHeaders: { origin: ORIGIN } });
+      const c: Client = connect(base, {
+        transports: ["websocket"],
+        forceNew: true,
+        reconnection: false,
+        extraHeaders: { origin: ORIGIN },
+      });
       sockets.push(c);
       return emitAck<ClientState>(c, "poll:join", payload);
     };
@@ -155,7 +198,13 @@ describe("end to end: a poll survives a server restart", () => {
       await fetch(`${base1}/api/polls`, {
         method: "POST",
         headers: { "content-type": "application/json", origin: ORIGIN },
-        body: JSON.stringify({ question: "Where do we eat tonight?", options: ["Italiano", "Sushi"], multiple: false, allowAddOwn: true, closesAt: null }),
+        body: JSON.stringify({
+          question: "Where do we eat tonight?",
+          options: ["Italiano", "Sushi"],
+          multiple: false,
+          allowAddOwn: true,
+          closesAt: null,
+        }),
       })
     ).json()) as { data: CreatePollResult };
     const { pollId, hostToken } = created.data;
@@ -177,11 +226,202 @@ describe("end to end: a poll survives a server restart", () => {
       expect(again.data.results?.totalPeople).toBe(3);
       expect(again.data.isHost).toBe(false);
     }
-    const asHost = await join(base2, { pollId, voterId: "integration-voter-0002", hostToken });
+    const asHost = await join(base2, {
+      pollId,
+      voterId: "integration-voter-0002",
+      hostToken,
+    });
     expect(asHost.ok && asHost.data.isHost).toBe(true);
-    const stranger = await join(base2, { pollId, voterId: "integration-voter-0003" });
+    const stranger = await join(base2, {
+      pollId,
+      voterId: "integration-voter-0003",
+    });
     expect(stranger.ok && stranger.data.results).toBeNull(); // results still hidden from someone who hasn't voted
     for (const s of sockets) s.disconnect();
     await app2.close();
+  });
+});
+
+describe("PgPollStore: dead connections after a scale-to-zero database (regression: create poll did nothing)", () => {
+  const terminated = () => Object.assign(new Error("Connection terminated unexpectedly"), {});
+
+  it("retries the whole unit of work once on a fresh connection when the pooled socket was stale", async () => {
+    let calls = 0;
+    const released: unknown[] = [];
+    const rows = [
+      {
+        id: "p1",
+        host_token_hash: "00",
+        question: "q?",
+        options: [],
+        next_option_seq: 1,
+        multiple: false,
+        allow_add_own: false,
+        closes_at: null,
+        closed_at: null,
+        created_at: "1",
+        expires_at: "2",
+        votes: {},
+        adders: [],
+      },
+    ];
+    const pool: PgPoolLike = {
+      async connect() {
+        return {
+          async query(sql: string) {
+            if (/SELECT/.test(sql) && calls++ === 0) throw terminated(); // first (stale) client is dead
+            return { rows };
+          },
+          release: (d) => void released.push(d ?? false),
+        };
+      },
+      async end() {},
+    };
+    const logs: string[] = [];
+    const store = new PgPollStore({
+      pool,
+      skipSchemaSetup: true,
+      retryDelayMs: 0,
+      log: (m) => logs.push(m),
+    });
+    await expect(store.get("p1")).resolves.toMatchObject({ id: "p1" });
+    expect(released).toEqual([true, false]); // stale client destroyed, fresh one returned to the pool
+    expect(logs.join("\n")).toMatch(/stale/);
+  });
+
+  it("gives up after one retry instead of looping", async () => {
+    const f = fakePool({
+      failOn: (sql) => (/SELECT/.test(sql) ? terminated() : null),
+    });
+    const store = new PgPollStore({
+      pool: f.pool,
+      skipSchemaSetup: true,
+      retryDelayMs: 0,
+    });
+    await expect(store.get("p1")).rejects.toThrow(/terminated/);
+    expect(f.released).toEqual([true, true]);
+  });
+
+  it("treats a duplicate key on the retried INSERT as success (the first attempt had committed)", async () => {
+    let inserts = 0;
+    const pool: PgPoolLike = {
+      async connect() {
+        return {
+          async query() {
+            inserts++;
+            if (inserts === 1) throw terminated();
+            throw Object.assign(new Error("duplicate key"), { code: "23505" });
+          },
+          release: () => {},
+        };
+      },
+      async end() {},
+    };
+    const store = new PgPollStore({
+      pool,
+      skipSchemaSetup: true,
+      retryDelayMs: 0,
+    });
+    const poll = {
+      id: "p1",
+      hostTokenHash: "00",
+      question: "q?",
+      options: [],
+      nextOptionSeq: 1,
+      multiple: false,
+      allowAddOwn: false,
+      closesAt: null,
+      closedAt: null,
+      createdAt: 1,
+      expiresAt: 2,
+      votes: {},
+      adders: [],
+    };
+    await expect(store.create(poll)).resolves.toBeUndefined();
+    expect(inserts).toBe(2);
+  });
+
+  it("does not retry a duplicate key on the first attempt", async () => {
+    const pool: PgPoolLike = {
+      async connect() {
+        return {
+          query: async () => {
+            throw Object.assign(new Error("duplicate key"), { code: "23505" });
+          },
+          release: () => {},
+        };
+      },
+      async end() {},
+    };
+    const store = new PgPollStore({ pool, skipSchemaSetup: true });
+    const poll = {
+      id: "p1",
+      hostTokenHash: "00",
+      question: "q?",
+      options: [],
+      nextOptionSeq: 1,
+      multiple: false,
+      allowAddOwn: false,
+      closesAt: null,
+      closedAt: null,
+      createdAt: 1,
+      expiresAt: 2,
+      votes: {},
+      adders: [],
+    };
+    await expect(store.create(poll)).rejects.toThrow(/duplicate/);
+  });
+
+  it("does not crash when a checked-out client emits 'error' (pg removes the pool's listener during checkout)", async () => {
+    const ee = new EventEmitter();
+    const logs: string[] = [];
+    const released: unknown[] = [];
+    const pool: PgPoolLike = {
+      async connect() {
+        return {
+          async query() {
+            // The socket dies while we hold the client, between queries: pg emits 'error' on the client.
+            ee.emit(
+              "error",
+              Object.assign(new Error("read ECONNRESET"), {
+                code: "ECONNRESET",
+              }),
+            );
+            return { rows: [{ n: 3 }] };
+          },
+          release: (d) => void released.push(d ?? false),
+          on: (ev: "error", l: (e: Error) => void) => ee.on(ev, l),
+          removeListener: (ev: "error", l: (e: Error) => void) => ee.removeListener(ev, l),
+        };
+      },
+      async end() {},
+    };
+    const store = new PgPollStore({
+      pool,
+      skipSchemaSetup: true,
+      log: (m) => logs.push(m),
+    });
+    await expect(store.count()).resolves.toBe(3);
+    expect(released).toEqual([true]); // flagged broken so the pool discards it
+    expect(logs.join(" ")).toMatch(/client error: ECONNRESET/);
+    expect(ee.listenerCount("error")).toBe(0); // our listener is removed on release
+    expect(() => ee.emit("error", new Error("late"))).toThrow(); // proves: without our listener this WOULD be uncaught
+  });
+
+  it("an idle pool 'error' is logged, never thrown", () => {
+    const ee = new EventEmitter();
+    const logs: string[] = [];
+    const pool: PgPoolLike = {
+      connect: async () => {
+        throw new Error("x");
+      },
+      end: async () => {},
+      on: (ev, l) => ee.on(ev, l),
+    };
+    new PgPollStore({ pool, skipSchemaSetup: true, log: (m) => logs.push(m) });
+    expect(() =>
+      ee.emit("error", Object.assign(new Error("terminating connection due to administrator command"), { code: "57P01" })),
+    ).not.toThrow();
+    expect(logs).toEqual(["postgres pool error: 57P01"]);
   });
 });

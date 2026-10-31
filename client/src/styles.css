@@ -336,6 +336,11 @@ input[aria-invalid="true"] {
   opacity: 0.6;
   cursor: not-allowed;
 }
+/* Waiting on the server is progress, not "disabled": keep the label at full strength. */
+.btn[aria-busy="true"]:disabled {
+  opacity: 1;
+  cursor: progress;
+}
 .btn-primary {
   background: var(--accent);
   color: var(--on-accent);
@@ -613,6 +618,11 @@ input[aria-invalid="true"] {
 .banner-warn {
   background: var(--warn-soft);
   color: var(--on-warn-soft);
+}
+.spinner-inline {
+  width: 18px;
+  height: 18px;
+  margin-top: 0;
 }
 .banner-time {
   font-variant-numeric: tabular-nums;
