@@ -11,6 +11,13 @@ export interface PgPoolLike {
 export interface PgClientLike {
   query(text: string, values?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
   release(destroy?: boolean | Error): void;
+  /**
+   * pg removes the pool's own 'error' listener while a client is checked out, so a socket error on a client that is
+   * in use (Neon suspending the compute, a pooler restart) would be an *unhandled* 'error' event and crash the process.
+   * We attach our own for the duration of every checkout.
+   */
+  on?(event: "error", listener: (err: Error) => void): unknown;
+  removeListener?(event: "error", listener: (err: Error) => void): unknown;
 }
 
 export interface PgStoreOptions {
@@ -30,6 +37,9 @@ export interface PgStoreOptions {
 
 const POLL_COLUMNS =
   "id, host_token_hash, question, options, next_option_seq, multiple, allow_add_own, closes_at, closed_at, created_at, expires_at, votes, adders";
+
+/** One retry: the pool hands out at most one stale client per dead socket, a fresh connection then works (or truly fails). */
+const MAX_STALE_RETRIES = 1;
 
 const num = (v: unknown): number => Number(v);
 const numOrNull = (v: unknown): number | null => (v === null || v === undefined ? null : Number(v));
@@ -77,6 +87,7 @@ export class PgPollStore implements PollStore {
   private readonly table: string;
   private readonly retryDelayMs: number;
   private readonly skipSchemaSetup: boolean;
+  private readonly log: ((msg: string) => void) | undefined;
   private ready: Promise<void> | null = null;
 
   constructor(opts: PgStoreOptions) {
@@ -85,6 +96,7 @@ export class PgPollStore implements PollStore {
     this.table = table;
     this.retryDelayMs = opts.retryDelayMs ?? 400;
     this.skipSchemaSetup = opts.skipSchemaSetup ?? false;
+    this.log = opts.log;
     if (opts.pool) {
       this.pool = opts.pool;
     } else {
@@ -161,16 +173,37 @@ export class PgPollStore implements PollStore {
     throw lastErr;
   }
 
-  private async run<T>(fn: (c: PgClientLike) => Promise<T>): Promise<T> {
-    const c = await this.acquire();
-    let broken = false;
-    try {
-      return await fn(c);
-    } catch (e) {
-      broken = isConnectionLoss(e);
-      throw e;
-    } finally {
-      c.release(broken);
+  /**
+   * Run `fn` on a checked-out client. If the connection turns out to be dead (a stale pooled socket after Neon
+   * scaled to zero, "Connection terminated unexpectedly"), the broken client is destroyed and `fn` runs once more
+   * on a fresh connection. `attempt` is 0 on the first try so callers can tell a retry from the original.
+   */
+  private async run<T>(fn: (c: PgClientLike, attempt: number) => Promise<T>): Promise<T> {
+    for (let attempt = 0; ; attempt++) {
+      const c = await this.acquire();
+      let broken = false;
+      const onClientError = (err: Error): void => {
+        broken = true;
+        this.log?.(`postgres client error: ${(err as { code?: string }).code ?? err.name}`);
+      };
+      c.on?.("error", onClientError);
+      try {
+        return await fn(c, attempt);
+      } catch (e) {
+        if (isStaleConnection(e)) {
+          broken = true;
+          if (attempt < MAX_STALE_RETRIES) {
+            this.log?.(`postgres connection was stale (${(e as { code?: string }).code ?? "terminated"}); retrying on a fresh one`);
+            continue;
+          }
+        } else if (isConnectionLoss(e)) {
+          broken = true;
+        }
+        throw e;
+      } finally {
+        c.removeListener?.("error", onClientError);
+        c.release(broken);
+      }
     }
   }
 
@@ -194,10 +227,9 @@ export class PgPollStore implements PollStore {
 
   async create(poll: PollRecord): Promise<void> {
     await this.init();
-    await this.run((c) =>
-      c.query(
-        `INSERT INTO ${this.table} (${POLL_COLUMNS}) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-        [
+    await this.run(async (c, attempt) => {
+      try {
+        await c.query(`INSERT INTO ${this.table} (${POLL_COLUMNS}) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, [
           poll.id,
           poll.hostTokenHash,
           poll.question,
@@ -211,9 +243,13 @@ export class PgPollStore implements PollStore {
           poll.expiresAt,
           JSON.stringify(poll.votes),
           JSON.stringify(poll.adders),
-        ],
-      ),
-    );
+        ]);
+      } catch (e) {
+        // A retry after a lost connection may find the first attempt's row already committed: that is success.
+        if (attempt > 0 && (e as { code?: string }).code === "23505") return;
+        throw e;
+      }
+    });
   }
 
   async get(id: string): Promise<PollRecord | null> {
@@ -269,6 +305,17 @@ export class PgPollStore implements PollStore {
     const res = await this.run((c) => c.query(`DELETE FROM ${this.table} WHERE expires_at <= $1 RETURNING id`, [now]));
     return res.rows.map((r) => String(r.id));
   }
+}
+
+/** The socket was dead before/while we used it (safe to retry the whole unit of work on a new connection). */
+function isStaleConnection(e: unknown): boolean {
+  const code = (e as { code?: unknown } | null)?.code;
+  const msg = e instanceof Error ? e.message : "";
+  return (
+    (typeof code === "string" &&
+      (code.startsWith("08") || code === "57P01" || code === "57P02" || code === "57P03" || code === "ECONNRESET" || code === "EPIPE")) ||
+    /Connection terminated|Client has encountered a connection error|connection (was )?(closed|ended)/i.test(msg)
+  );
 }
 
 function isConnectionLoss(e: unknown): boolean {

@@ -74,7 +74,9 @@ describe("PollPage", () => {
     const qr = await screen.findByRole("img", { name: /QR code/ });
     expect(qr.getAttribute("src")).toContain("data:image/svg+xml");
     expect((screen.getByLabelText("Share link") as HTMLInputElement).value).toMatch(/#\/p\/abcdefghjk$/);
-    expect((screen.getByLabelText(/Private host link/) as HTMLInputElement).value).toMatch(/#\/p\/abcdefghjk\/host\/host-token-1234567890$/);
+    expect((screen.getByLabelText(/Private host link/) as HTMLInputElement).value).toMatch(
+      /#\/p\/abcdefghjk\/host\/host-token-1234567890$/,
+    );
 
     await userEvent.click(screen.getByRole("button", { name: "Close poll" }));
     expect(screen.getByRole("alertdialog")).toHaveTextContent("Close voting now?");
@@ -120,5 +122,26 @@ describe("PollPage", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("This host link isn't valid.");
     expect(screen.getByRole("link", { name: "Start a new poll" })).toHaveAttribute("href", "#/");
     await expectNoA11yViolations(container);
+  });
+
+  it("while connecting: always-visible wake-up note, in a polite live region, then it goes away once the poll loads", async () => {
+    current = base({ connection: "connecting", state: null });
+    const { container, rerender } = render(<PollPage pollId="abcdefghjk" hostToken={null} />);
+    const region = screen.getByTestId("connection-status");
+    expect(region).toHaveAttribute("aria-live", "polite");
+    expect(region).toHaveTextContent(
+      "First visit in a while? The server takes up to a minute to wake up. This poll opens once it's ready.",
+    );
+    await expectNoA11yViolations(container);
+    current = base({ connection: "waking", state: null, waitedSeconds: 12 });
+    rerender(<PollPage pollId="abcdefghjk" hostToken={null} />);
+    expect(screen.getByTestId("connection-status")).toBe(region);
+    expect(region).toHaveTextContent("Server waking up…");
+    expect(region).toHaveTextContent("takes up to a minute");
+    current = base();
+    rerender(<PollPage pollId="abcdefghjk" hostToken={null} />);
+    expect(screen.getByTestId("connection-status")).toBe(region);
+    expect(region).toBeEmptyDOMElement();
+    expect(screen.getByRole("heading", { name: "Where do we eat?" })).toBeInTheDocument();
   });
 });

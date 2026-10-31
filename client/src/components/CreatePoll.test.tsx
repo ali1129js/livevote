@@ -1,20 +1,24 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { expectNoA11yViolations } from "../test/axe";
 
 const createPoll = vi.fn();
+const pingHealth = vi.fn<() => Promise<boolean>>();
 vi.mock("../api", async (orig) => ({
   ...(await orig<typeof import("../api")>()),
   createPoll: (...a: unknown[]) => createPoll(...a),
-  pingHealth: () => Promise.resolve(true),
+  pingHealth: () => pingHealth(),
 }));
 
-import { ApiFailure } from "../api";
+import { ApiFailure, MSG_TIMEOUT } from "../api";
+import { WAKE_NOTE_CREATE } from "./Banner";
 import { CreatePoll, toLocalInput } from "./CreatePoll";
 
 beforeEach(() => {
   createPoll.mockReset();
+  pingHealth.mockReset();
+  pingHealth.mockResolvedValue(true);
   window.location.hash = "";
 });
 
@@ -107,6 +111,87 @@ describe("CreatePoll", () => {
     const { container } = render(<CreatePoll />);
     await userEvent.click(screen.getByLabelText(/Close automatically/));
     await userEvent.click(screen.getByRole("button", { name: "+ Add option" }));
+    await expectNoA11yViolations(container);
+  });
+});
+
+describe("CreatePoll: waking-server feedback (regression: 'Create poll does nothing')", () => {
+  it("always shows the wake-up note first, in a polite live region, and it changes once the server answers", async () => {
+    let wake!: (ok: boolean) => void;
+    pingHealth.mockReturnValue(new Promise<boolean>((r) => (wake = r)));
+    render(<CreatePoll />);
+    const region = screen.getByTestId("connection-status");
+    expect(region).toHaveAttribute("role", "status");
+    expect(region).toHaveAttribute("aria-live", "polite");
+    expect(region).toHaveTextContent(WAKE_NOTE_CREATE);
+    expect(region).toHaveTextContent(
+      "First visit in a while? The server takes up to a minute to wake up. Your poll is created once it's ready.",
+    );
+    wake(true);
+    expect(await screen.findByTestId("awake")).toHaveTextContent("Server is awake.");
+    expect(screen.getByTestId("connection-status")).toBe(region); // same live region, so the change is announced
+    expect(region).not.toHaveTextContent("takes up to a minute");
+  });
+
+  it("tapping Create poll while the server is asleep shows progress on the button and the waking banner, never silence", async () => {
+    pingHealth.mockReturnValue(new Promise<boolean>(() => undefined));
+    let slow: (() => void) | undefined;
+    let finish!: (v: { pollId: string; hostToken: string }) => void;
+    createPoll.mockImplementation((_input: unknown, o: { onSlow?: () => void }) => {
+      slow = o.onSlow;
+      return new Promise((r) => (finish = r));
+    });
+    render(<CreatePoll />);
+    await fillValid();
+    await userEvent.click(screen.getByRole("button", { name: "Create poll" }));
+    const btn = screen.getByRole("button", { name: "Creating…" });
+    expect(btn).toBeDisabled();
+    expect(btn).toHaveAttribute("aria-busy", "true");
+    slow?.(); // the api layer says: no answer yet / retrying
+    expect(await screen.findByRole("button", { name: "Waking the server…" })).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByTestId("waking")).toHaveTextContent("Server waking up…");
+    expect(screen.getByTestId("waking")).toHaveTextContent("Your poll is created once it's ready.");
+    finish({ pollId: "abcd2345xy", hostToken: "secret-token-value-123" });
+    await vi.waitFor(() => expect(window.location.hash).toBe("#/p/abcd2345xy/host/secret-token-value-123"));
+  });
+
+  it("shows the timeout message in an alert and gives the button back", async () => {
+    createPoll.mockRejectedValue(new ApiFailure(MSG_TIMEOUT, "timeout"));
+    render(<CreatePoll />);
+    await fillValid();
+    await userEvent.click(screen.getByRole("button", { name: "Create poll" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(MSG_TIMEOUT);
+    expect(alert).toBeVisible();
+    expect(screen.getByRole("button", { name: "Create poll" })).toBeEnabled();
+  });
+
+  it("an empty or invalid closing time is reported, not ignored (mobile pickers can leave it blank)", async () => {
+    render(<CreatePoll />);
+    await fillValid();
+    await userEvent.click(screen.getByLabelText(/Close automatically/));
+    fireEvent.change(screen.getByLabelText("Closing time"), { target: { value: "" } });
+    await userEvent.click(screen.getByRole("button", { name: "Create poll" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Pick a valid closing time.");
+    expect(createPoll).not.toHaveBeenCalled();
+  });
+
+  it("a closing time in the past is reported by validation", async () => {
+    render(<CreatePoll />);
+    await fillValid();
+    await userEvent.click(screen.getByLabelText(/Close automatically/));
+    fireEvent.change(screen.getByLabelText("Closing time"), { target: { value: "2020-01-01T10:00" } });
+    await userEvent.click(screen.getByRole("button", { name: "Create poll" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/at least a minute in the future/);
+  });
+
+  it("is accessible while waking and while busy", async () => {
+    pingHealth.mockReturnValue(new Promise<boolean>(() => undefined));
+    createPoll.mockReturnValue(new Promise(() => undefined));
+    const { container } = render(<CreatePoll />);
+    await expectNoA11yViolations(container);
+    await fillValid();
+    await userEvent.click(screen.getByRole("button", { name: "Create poll" }));
     await expectNoA11yViolations(container);
   });
 });
