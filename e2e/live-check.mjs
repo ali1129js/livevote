@@ -44,6 +44,13 @@ for (const withClose of process.env.CLOSE_ONLY === "0" ? [false] : [false, true]
   log.push(`${T()} button before click: "${await btn.innerText()}" disabled=${await btn.isDisabled()}`);
   await btn.click();
   log.push(`${T()} clicked`);
+  // What the user sees a few seconds in (matters on a cold server): note, live state, progress button.
+  await page.waitForTimeout(5000);
+  if (!/#\/p\//.test(page.url())) {
+    log.push(`${T()} still waiting: button="${await page.getByRole("button", { name: /Create poll|Creating|Waking/ }).innerText().catch(() => "(gone)")}" status="${(await page.getByTestId("connection-status").innerText().catch(() => "n/a")).replace(/\s+/g, " ")}"`);
+    await page.getByRole("button", { name: /Create poll|Creating|Waking/ }).scrollIntoViewIfNeeded().catch(() => undefined);
+    await page.screenshot({ path: `${out}/${name}-${withClose ? "close" : "noclose"}-waiting.png` });
+  }
   let result = "TIMEOUT";
   try { await page.waitForURL(/#\/p\//, { timeout: 100000 }); await page.getByRole("img", { name: /QR code/ }).waitFor({ timeout: 10000 }); result = "OK host page"; } catch {}
   const alert = await page.getByRole("alert").allInnerTexts();
